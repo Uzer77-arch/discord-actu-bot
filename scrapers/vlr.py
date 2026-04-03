@@ -1,8 +1,9 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import re
 
-VLR_NEWS_URL   = "https://www.vlr.gg/news"
+VLR_NEWS_URL    = "https://www.vlr.gg/news"
 VLR_MATCHES_URL = "https://www.vlr.gg/matches"
 
 HEADERS = {
@@ -12,6 +13,28 @@ HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     )
 }
+
+# Fuseau horaire Europe/Paris (UTC+1 hiver, UTC+2 été)
+def to_paris_time(utc_time_str: str) -> str:
+    """Convertit une heure UTC en heure de Paris (UTC+1/+2)."""
+    try:
+        # VLR affiche les heures en format "HH:MM" en UTC
+        now = datetime.now(timezone.utc)
+        # Détecte si on est en heure d'été (dernier dimanche de mars → dernier dimanche d'octobre)
+        # Approximation simple : avril à octobre = UTC+2, reste = UTC+1
+        if 4 <= now.month <= 10:
+            offset = timedelta(hours=2)
+            tz_label = "CEST"
+        else:
+            offset = timedelta(hours=1)
+            tz_label = "CET"
+
+        h, m = map(int, utc_time_str.strip().split(":"))
+        utc_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        paris_dt = utc_dt + offset
+        return f"{paris_dt.strftime('%H:%M')} {tz_label}"
+    except:
+        return utc_time_str
 
 
 def get_vlr_news(limit: int = 10) -> list[dict]:
@@ -70,7 +93,11 @@ def get_vlr_news(limit: int = 10) -> list[dict]:
 
 
 def get_vlr_matches() -> list[dict]:
-    """Récupère les matchs du jour (à venir + terminés) depuis VLR.gg."""
+    """
+    Récupère les matchs depuis VLR.gg/matches.
+    Utilise les statuts officiels : UPCOMING, LIVE, COMPLETED.
+    Horaires convertis en heure de Paris (UTC+1/+2).
+    """
     try:
         r = requests.get(VLR_MATCHES_URL, headers=HEADERS, timeout=10)
         r.raise_for_status()
@@ -83,46 +110,67 @@ def get_vlr_matches() -> list[dict]:
 
     for item in soup.select("a.wf-module-item"):
         try:
-            href  = item.get("href", "")
-            url   = "https://www.vlr.gg" + href if href.startswith("/") else href
+            href = item.get("href", "")
+            url  = "https://www.vlr.gg" + href if href.startswith("/") else href
 
+            # Équipes
             teams = item.select(".match-item-vs-team-name")
             if len(teams) < 2:
                 continue
-
-            t1    = teams[0].get_text(strip=True)
-            t2    = teams[1].get_text(strip=True)
+            t1 = teams[0].get_text(strip=True)
+            t2 = teams[1].get_text(strip=True)
             if not t1 or not t2:
                 continue
 
-            time_tag  = item.select_one(".match-item-time")
-            event_tag = item.select_one(".match-item-event .match-item-event-series") or item.select_one(".match-item-event")
-            score_tag = item.select(".match-item-vs-team-score")
-            status    = item.select_one(".ml-status") or item.select_one(".match-item-status")
+            # ── Statut officiel VLR ──────────────────────────────
+            status_tag = item.select_one(".ml-status") or item.select_one(".match-item-status")
+            status_raw = status_tag.get_text(strip=True).upper() if status_tag else ""
 
-            # Score et statut
-            score    = ""
-            finished = False
-            if score_tag and len(score_tag) >= 2:
-                s1 = score_tag[0].get_text(strip=True)
-                s2 = score_tag[1].get_text(strip=True)
-                if s1.isdigit() and s2.isdigit():
-                    score    = f"{s1} - {s2}"
-                    finished = True
+            if "COMPLETED" in status_raw or "FINAL" in status_raw:
+                status   = "COMPLETED"
+                finished = True
+                live     = False
+            elif "LIVE" in status_raw:
+                status   = "LIVE"
+                finished = False
+                live     = True
+            else:
+                status   = "UPCOMING"
+                finished = False
+                live     = False
 
-            if status:
-                st = status.get_text(strip=True).lower()
-                if "completed" in st or "final" in st:
-                    finished = True
+            # ── Score (uniquement si COMPLETED) ──────────────────
+            score = ""
+            if finished:
+                score_tags = item.select(".match-item-vs-team-score")
+                if len(score_tags) >= 2:
+                    s1 = score_tags[0].get_text(strip=True)
+                    s2 = score_tags[1].get_text(strip=True)
+                    if s1.isdigit() and s2.isdigit():
+                        score = f"{s1} - {s2}"
+
+            # ── Heure (convertie en heure de Paris) ──────────────
+            time_tag  = item.select_one(".match-item-time") or item.select_one(".moment-tz-convert")
+            time_raw  = time_tag.get_text(strip=True) if time_tag else ""
+            time_paris = to_paris_time(time_raw) if time_raw and ":" in time_raw else time_raw
+
+            # ── Événement ────────────────────────────────────────
+            event_tag = (
+                item.select_one(".match-item-event .match-item-event-series")
+                or item.select_one(".match-item-event")
+            )
+            event = event_tag.get_text(strip=True) if event_tag else ""
 
             matches.append({
                 "team1":    t1,
                 "team2":    t2,
                 "score":    score,
-                "time":     time_tag.get_text(strip=True) if time_tag else "?",
-                "event":    event_tag.get_text(strip=True) if event_tag else "",
+                "time":     time_paris,
+                "event":    event,
                 "url":      url,
+                "status":   status,
                 "finished": finished,
+                "live":     live,
             })
         except Exception as e:
             print(f"[VLR] Erreur match : {e}")

@@ -215,8 +215,9 @@ async def slash_match(interaction: discord.Interaction):
     embed.set_author(name="VLR.gg — Calendrier", icon_url=VLR_LOGO)
     embed.set_thumbnail(url=VLR_LOGO)
 
-    upcoming = [m for m in matches if not m.get("finished")]
-    finished = [m for m in matches if m.get("finished")]
+    upcoming = [m for m in matches if m.get("status") == "UPCOMING"]
+    live     = [m for m in matches if m.get("status") == "LIVE"]
+    finished = [m for m in matches if m.get("status") == "COMPLETED"]
 
     if upcoming:
         lines = []
@@ -243,7 +244,7 @@ async def slash_match(interaction: discord.Interaction):
 async def slash_results(interaction: discord.Interaction):
     await interaction.response.defer()
     matches  = get_vlr_matches()
-    finished = [m for m in matches if m.get("finished")]
+    finished = [m for m in matches if m.get("status") == "COMPLETED"]
 
     if not finished:
         await interaction.followup.send("😕 Aucun résultat disponible pour aujourd'hui.")
