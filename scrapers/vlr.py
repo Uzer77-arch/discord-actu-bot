@@ -14,6 +14,23 @@ HEADERS = {
     )
 }
 
+# Mots-clés pour identifier les régions dans le nom de l'événement
+REGION_KEYWORDS = {
+    "EMEA":    ["emea", "europe", "eu", "eur"],
+    "NA":      ["na", "north america", "amer", "americas"],
+    "PACIFIC": ["pacific", "pac", "apac", "asia"],
+    "CHINA":   ["china", "cn", "chinese"],
+    "BR":      ["brazil", "brasil", "br", "latam"],
+}
+
+def detect_region(event: str) -> str:
+    """Détecte la région d'un match à partir du nom de l'événement."""
+    event_lower = event.lower()
+    for region, keywords in REGION_KEYWORDS.items():
+        if any(kw in event_lower for kw in keywords):
+            return region
+    return "OTHER"
+
 def to_paris_time(utc_time_str: str) -> str:
     try:
         now      = datetime.now(timezone.utc)
@@ -45,7 +62,6 @@ def get_vlr_news(limit: int = 10) -> list[dict]:
             title_tag = (
                 item.select_one(".wf-title")
                 or item.select_one("h1") or item.select_one("h2") or item.select_one("h3")
-                or item.select_one(".mod-large") or item.select_one(".article-title")
             )
             desc_tag = item.select_one(".ge-text-light") or item.select_one("p")
             date_tag = item.select_one(".ge-text") or item.select_one(".date")
@@ -130,15 +146,15 @@ def _parse_matches_from_url(url: str, default_status: str = "UPCOMING") -> list[
             time_raw   = time_tag.get_text(strip=True) if time_tag else ""
             time_paris = to_paris_time(time_raw) if time_raw and ":" in time_raw else time_raw
 
-            # Date affichée (ex: "Today", "Tomorrow", "Fri, Apr 4")
-            date_tag  = item.select_one(".match-item-date") or item.select_one(".wf-label")
-            date_str  = date_tag.get_text(strip=True) if date_tag else ""
+            date_tag = item.select_one(".match-item-date") or item.select_one(".wf-label")
+            date_str = date_tag.get_text(strip=True) if date_tag else ""
 
             event_tag = (
                 item.select_one(".match-item-event .match-item-event-series")
                 or item.select_one(".match-item-event")
             )
-            event = event_tag.get_text(strip=True) if event_tag else ""
+            event  = event_tag.get_text(strip=True) if event_tag else ""
+            region = detect_region(event)
 
             matches.append({
                 "team1":    t1,
@@ -147,6 +163,7 @@ def _parse_matches_from_url(url: str, default_status: str = "UPCOMING") -> list[
                 "time":     time_paris,
                 "date":     date_str,
                 "event":    event,
+                "region":   region,
                 "url":      murl,
                 "status":   status,
                 "finished": finished,
@@ -159,34 +176,24 @@ def _parse_matches_from_url(url: str, default_status: str = "UPCOMING") -> list[
 
 
 def get_vlr_matches() -> list[dict]:
-    """Matchs à venir + LIVE sur /matches (jusqu'à 7 jours)."""
     matches = _parse_matches_from_url(VLR_MATCHES_URL, default_status="UPCOMING")
+    # Tri chronologique : du plus ancien au plus récent
+    matches.sort(key=lambda m: m.get("time", "99:99"))
     print(f"[VLR] {len(matches)} match(s) récupéré(s)")
     return matches
 
 
 def get_vlr_results() -> list[dict]:
-    """Résultats du jour depuis /matches/results."""
     results = _parse_matches_from_url(VLR_RESULTS_URL, default_status="COMPLETED")
+    # Tri chronologique : du plus ancien au plus récent
+    results.sort(key=lambda m: m.get("time", "99:99"))
     print(f"[VLR] {len(results)} résultat(s) récupéré(s)")
     return results
 
 
 def get_all_matches() -> dict:
-    """
-    Récupère tout en une fois et retourne un dict avec 3 clés :
-    - live     : matchs en cours
-    - results  : matchs terminés aujourd'hui
-    - upcoming : matchs à venir (7 jours)
-    """
     schedule = get_vlr_matches()
     results  = get_vlr_results()
-
     live     = [m for m in schedule if m["status"] == "LIVE"]
     upcoming = [m for m in schedule if m["status"] == "UPCOMING"]
-
-    return {
-        "live":     live,
-        "results":  results,
-        "upcoming": upcoming,
-    }
+    return {"live": live, "results": results, "upcoming": upcoming}
