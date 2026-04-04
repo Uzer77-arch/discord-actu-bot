@@ -41,417 +41,213 @@ def append_file(path, value):
 posted           = load_file("posted.txt")
 notified_results = load_file("results.txt")
 
-TEAMS = {
-    "Sentinels":     "sentinels",
-    "Team Liquid":   "team-liquid",
-    "LOUD":          "loud",
-    "NaVi":          "natus-vincere",
-    "Fnatic":        "fnatic",
-    "Cloud9":        "cloud9",
-    "100 Thieves":   "100-thieves",
-    "EDward Gaming": "edward-gaming",
-    "ZETA DIVISION": "zeta-division",
-    "Team Vitality": "team-vitality",
+TEAMS_BY_REGION = {
+    "EMEA": {
+        "Team Vitality":  "team-vitality",
+        "Team Liquid":    "team-liquid",
+        "Fnatic":         "fnatic",
+        "NaVi":           "natus-vincere",
+        "BBL Esports":    "bbl-esports",
+        "G2 Esports":     "g2-esports",
+        "Gentle Mates":   "gentle-mates",
+        "FUT Esports":    "fut-esports",
+        "GIANTX":         "giantx",
+        "KOI":            "koi",
+    },
+    "NA": {
+        "Sentinels":      "sentinels",
+        "Cloud9":         "cloud9",
+        "100 Thieves":    "100-thieves",
+        "NRG":            "nrg",
+        "Evil Geniuses":  "evil-geniuses",
+        "LOUD":           "loud",
+        "FURIA":          "furia",
+        "MIBR":           "mibr",
+        "Leviatán":       "leviatan",
+        "KRÜ Esports":    "kru-esports",
+    },
+    "PACIFIC": {
+        "Paper Rex":      "paper-rex",
+        "T1":             "t1",
+        "Gen.G":          "gen-g",
+        "DRX":            "drx",
+        "ZETA DIVISION":  "zeta-division",
+        "Global Esports": "global-esports",
+        "Talon Esports":  "talon-esports",
+        "Rex Regum Qeon": "rex-regum-qeon",
+        "Team Secret":    "team-secret",
+        "DetonatioN FM":  "detonation-focusme",
+    },
+    "CHINA": {
+        "EDward Gaming":  "edward-gaming",
+        "Bilibili Gaming":"bilibili-gaming",
+        "FunPlus Phoenix":"funplus-phoenix",
+        "Nova Esports":   "nova-esports",
+        "Wolves Esports": "wolves-esports",
+        "Dragon Ranger":  "dragon-ranger-gaming",
+        "Trace Esports":  "trace-esports",
+        "TYLOO":          "tyloo",
+    },
+    "BR": {
+        "LOUD":           "loud",
+        "FURIA":          "furia",
+        "MIBR":           "mibr",
+        "Leviatán":       "leviatan",
+        "KRÜ Esports":    "kru-esports",
+        "9z Team":        "9z-team",
+        "Sentinels":      "sentinels",
+        "100 Thieves":    "100-thieves",
+    },
+}
+
+REGION_LABELS = {
+    "EMEA":    "🇪🇺 EMEA",
+    "NA":      "🇺🇸 NA / AMER",
+    "PACIFIC": "🌏 Pacific",
+    "CHINA":   "🇨🇳 China",
+    "BR":      "🇧🇷 LATAM",
 }
 
 # ─────────────────────────────────────────
-# Traduction
+# /team — Étape 1 : choix région
 # ─────────────────────────────────────────
-def translate_to_french(text):
-    if not text: return text
+async def fetch_team_info(interaction, team_tag, team_name):
+    """Scrape et affiche les infos d'une équipe."""
     try:
-        r = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={"client":"gtx","sl":"auto","tl":"fr","dt":"t","q":text},
-            timeout=5,
-        )
-        return "".join(p[0] for p in r.json()[0] if p[0]) or text
-    except:
-        return text
+        headers   = {"User-Agent": "Mozilla/5.0"}
+        search_r  = requests.get(f"https://www.vlr.gg/search/?q={team_tag}&type=teams", headers=headers, timeout=10)
+        soup      = BeautifulSoup(search_r.text, "html.parser")
+        team_link = soup.select_one("a.search-item")
+        if not team_link:
+            await interaction.followup.send(f"😕 Impossible de trouver **{team_name}**")
+            return
+        team_url  = "https://www.vlr.gg" + team_link.get("href","")
+        team_page = requests.get(team_url, headers=headers, timeout=10)
+        tsoup     = BeautifulSoup(team_page.text, "html.parser")
 
-# ─────────────────────────────────────────
-# Filtre région
-# ─────────────────────────────────────────
-def filter_by_region(matches, region):
-    if region == "ALL": return matches
-    return [m for m in matches if m.get("region") == region]
+        logo_tag = tsoup.select_one(".team-header-logo img")
+        logo_url = None
+        if logo_tag:
+            logo_url = logo_tag.get("src","")
+            if logo_url.startswith("//"): logo_url = "https:" + logo_url
 
-# ─────────────────────────────────────────
-# Embeds
-# ─────────────────────────────────────────
-def make_vlr_embed(article):
-    title = translate_to_french(article.get("title","Sans titre"))
-    desc  = article.get("description","")
-    desc  = translate_to_french(desc) if desc else "Clique sur le titre pour lire l'article complet."
-    embed = discord.Embed(title=title, url=article.get("url",""), description=desc, color=0xFF4655)
-    embed.set_author(name="VLR.gg — Valorant Esport", icon_url=VLR_LOGO)
-    if article.get("image"): embed.set_thumbnail(url=article["image"])
-    if article.get("date"):  embed.set_footer(text=f"📅 {article['date']}", icon_url=VLR_LOGO)
-    return embed
+        players = []
+        for player in tsoup.select(".team-roster-item")[:10]:
+            alias = player.select_one(".team-roster-item-name-alias")
+            real  = player.select_one(".team-roster-item-name-real")
+            role  = player.select_one(".team-roster-item-name-role")
+            if alias:
+                line = f"**{alias.get_text(strip=True)}**"
+                if real: line += f" — {real.get_text(strip=True)}"
+                if role: line += f" *({role.get_text(strip=True)})*"
+                players.append(line)
 
-def make_result_embed(match):
-    t1, t2 = match.get("team1","?"), match.get("team2","?")
-    score  = match.get("score","?")
-    event  = match.get("event","")
-    url    = match.get("url","")
-    try:
-        s1, s2 = score.split(" - ")
-        winner = t1 if int(s1) > int(s2) else t2
-        result_line = f"🏆 **{winner}** remporte le match !"
-    except:
-        result_line = ""
-    embed = discord.Embed(
-        title=f"📣 Résultat : {t1} vs {t2}", url=url,
-        description=f"**{t1}  {score}  {t2}**\n{result_line}", color=0xFF4655,
-    )
-    embed.set_author(name="VLR.gg — Résultats", icon_url=VLR_LOGO)
-    if event: embed.add_field(name="🎯 Événement", value=event, inline=False)
-    embed.set_footer(text="Résultat Valorant Pro • VLR.gg", icon_url=VLR_LOGO)
-    return embed
+        past_matches = []
+        for match in tsoup.select(".m-item")[:5]:
+            teams = match.select(".m-item-team-name")
+            score = match.select_one(".m-item-result")
+            date  = match.select_one(".m-item-date")
+            if teams and len(teams) >= 2:
+                t1 = teams[0].get_text(strip=True)
+                t2 = teams[1].get_text(strip=True)
+                sc = score.get_text(strip=True) if score else "vs"
+                dt = date.get_text(strip=True) if date else ""
+                past_matches.append(f"`{dt}` {t1} **{sc}** {t2}")
 
-# ─────────────────────────────────────────
-# Construction embed paginé
-# ─────────────────────────────────────────
-def build_match_embed(data, page, region="ALL"):
-    region_label = REGIONS.get(region, "🌍 Toutes")
-    live     = filter_by_region(data["live"],     region)
-    results  = filter_by_region(data["results"],  region)
-    upcoming = filter_by_region(data["upcoming"], region)
-    total_up_pages = max(1, -(-len(upcoming) // ITEMS_PER_PAGE))
-    total_pages    = 2 + total_up_pages
+        upcoming_matches = []
+        try:
+            match_page = requests.get(team_url + "/matches", headers=headers, timeout=10)
+            msoup      = BeautifulSoup(match_page.text, "html.parser")
+            for match in msoup.select("a.wf-module-item")[:5]:
+                mteams = match.select(".match-item-vs-team-name")
+                time   = match.select_one(".match-item-time")
+                event  = match.select_one(".match-item-event")
+                if mteams and len(mteams) >= 2:
+                    mt1   = mteams[0].get_text(strip=True)
+                    mt2   = mteams[1].get_text(strip=True)
+                    heure = time.get_text(strip=True) if time else "?"
+                    ev    = event.get_text(strip=True) if event else ""
+                    line  = f"🕐 `{heure}` — **{mt1}** vs **{mt2}**"
+                    if ev: line += f"\n┗ *{ev}*"
+                    upcoming_matches.append(line)
+        except: pass
 
-    if page == 0:
-        embed = discord.Embed(
-            title       = f"🔴 Matchs en cours — {region_label}",
-            description = f"**{len(live)}** match(s) en ce moment" if live else "Aucun match en cours pour l'instant.",
-            color       = 0xFF4655,
-        )
-        if live:
-            lines = []
-            for m in live:
-                line = f"🔴 **{m['team1']}** vs **{m['team2']}**"
-                if m.get("score"): line += f" | `{m['score']}`"
-                if m.get("event"): line += f"\n┗ *{m['event']}*"
-                lines.append(line)
-            embed.add_field(name="En cours", value="\n\n".join(lines), inline=False)
-
-    elif page == 1:
-        embed = discord.Embed(
-            title       = f"✅ Résultats du jour — {region_label}",
-            description = f"**{len(results)}** match(s) terminé(s)" if results else "Aucun résultat pour cette région.",
-            color       = 0xFF4655,
-        )
-        by_event = {}
-        for m in results:
-            ev = m.get("event","Autre") or "Autre"
-            by_event.setdefault(ev, []).append(m)
-        for ev, ms in by_event.items():
-            lines = []
-            for m in ms:
-                t1, t2, score = m["team1"], m["team2"], m.get("score","?")
-                try:
-                    s1, s2 = score.split(" - ")
-                    winner = t1 if int(s1) > int(s2) else t2
-                    lines.append(f"🏆 [{t1} **{score}** {t2}]({m['url']}) — *{winner}*")
-                except:
-                    lines.append(f"[{t1} **{score}** {t2}]({m['url']})")
-            embed.add_field(name=f"🎯 {ev}", value="\n".join(lines), inline=False)
-
-    else:
-        up_page   = page - 2
-        chunk     = upcoming[up_page * ITEMS_PER_PAGE:(up_page + 1) * ITEMS_PER_PAGE]
-        embed = discord.Embed(
-            title       = f"📅 À venir — {region_label} ({up_page + 1}/{total_up_pages})",
-            description = f"**{len(upcoming)}** match(s) prévus" if upcoming else "Aucun match prévu.",
-            color       = 0xFF4655,
-        )
-        if chunk:
-            by_date = {}
-            for m in chunk:
-                d = m.get("date","") or "Date inconnue"
-                by_date.setdefault(d, []).append(m)
-            for d, ms in by_date.items():
-                lines = []
-                for m in ms:
-                    line = f"🕐 `{m.get('time','?')}` — **{m['team1']}** vs **{m['team2']}**"
-                    if m.get("event"): line += f"\n┗ *{m['event']}*"
-                    lines.append(line)
-                embed.add_field(name=f"📆 {d}", value="\n\n".join(lines), inline=False)
-
-    embed.set_author(name="VLR.gg — Calendrier", icon_url=VLR_LOGO)
-    embed.set_thumbnail(url=VLR_LOGO)
-    embed.set_footer(
-        text=f"Page {page+1}/{total_pages} • {region_label} • VLR.gg",
-        icon_url=VLR_LOGO,
-    )
-    return embed
-
-def get_total_pages(data, region="ALL"):
-    upcoming = filter_by_region(data["upcoming"], region)
-    return 2 + max(1, -(-len(upcoming) // ITEMS_PER_PAGE))
-
-# ─────────────────────────────────────────
-# Vue principale — navigation + menu région
-# ─────────────────────────────────────────
-class MatchView(discord.ui.View):
-    def __init__(self, data, page=0, region="ALL"):
-        super().__init__(timeout=180)
-        self.data        = data
-        self.page        = page
-        self.region      = region
-        self.total_pages = get_total_pages(data, region)
-        self._rebuild()
-
-    def _rebuild(self):
-        self.clear_items()
-
-        # ── Ligne 0 : navigation ──────────────────────────────
-        prev = discord.ui.Button(
-            label="◀ Précédent", style=discord.ButtonStyle.primary,
-            disabled=self.page == 0, row=0,
-        )
-        prev.callback = self._prev
-        self.add_item(prev)
-
-        nxt_label = {0: "Résultats ▶", 1: "À venir ▶"}.get(self.page, "Suivant ▶")
-        nxt = discord.ui.Button(
-            label=nxt_label, style=discord.ButtonStyle.primary,
-            disabled=self.page >= self.total_pages - 1, row=0,
-        )
-        nxt.callback = self._next
-        self.add_item(nxt)
-
-        refresh = discord.ui.Button(label="🔄 Actualiser", style=discord.ButtonStyle.success, row=0)
-        refresh.callback = self._refresh
-        self.add_item(refresh)
-
-        # ── Ligne 1 : menu déroulant région ──────────────────
-        region_select = discord.ui.Select(
-            placeholder = f"Région : {REGIONS.get(self.region, '🌍 Toutes')}",
-            options     = [
-                discord.SelectOption(
-                    label   = label,
-                    value   = key,
-                    default = key == self.region,
-                )
-                for key, label in REGIONS.items()
-            ],
-            row=1,
-        )
-        region_select.callback = self._region_changed
-        self.add_item(region_select)
-
-    async def _prev(self, interaction: discord.Interaction):
-        self.page -= 1
-        self._rebuild()
-        await interaction.response.edit_message(
-            embed=build_match_embed(self.data, self.page, self.region), view=self)
-
-    async def _next(self, interaction: discord.Interaction):
-        self.page += 1
-        self._rebuild()
-        await interaction.response.edit_message(
-            embed=build_match_embed(self.data, self.page, self.region), view=self)
-
-    async def _refresh(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        self.data        = get_all_matches()
-        self.total_pages = get_total_pages(self.data, self.region)
-        self.page        = min(self.page, self.total_pages - 1)
-        self._rebuild()
-        await interaction.edit_original_response(
-            embed=build_match_embed(self.data, self.page, self.region), view=self)
-
-    async def _region_changed(self, interaction: discord.Interaction):
-        self.region      = interaction.data["values"][0]
-        self.page        = 0
-        self.total_pages = get_total_pages(self.data, self.region)
-        self._rebuild()
-        await interaction.response.edit_message(
-            embed=build_match_embed(self.data, self.page, self.region), view=self)
-
-# ─────────────────────────────────────────
-# Événements
-# ─────────────────────────────────────────
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user} (ID: {bot.user.id})")
-    try:
-        synced = await bot.tree.sync()
-        print(f"🔄 {len(synced)} commande(s) slash synchronisée(s)")
+        embed = discord.Embed(title=f"🎮 {team_name}", url=team_url, color=0xFF4655)
+        embed.set_author(name="VLR.gg", icon_url=VLR_LOGO)
+        if logo_url:         embed.set_thumbnail(url=logo_url)
+        if players:          embed.add_field(name="👥 Roster",            value="\n".join(players),           inline=False)
+        if upcoming_matches: embed.add_field(name="📆 Prochains matchs",  value="\n\n".join(upcoming_matches), inline=False)
+        if past_matches:     embed.add_field(name="📊 Derniers résultats", value="\n".join(past_matches),      inline=False)
+        embed.add_field(name="🔗 Page complète", value=f"[Voir sur VLR.gg]({team_url})", inline=False)
+        embed.set_footer(text="Données récupérées depuis VLR.gg", icon_url=VLR_LOGO)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
-        print(f"❌ Erreur sync : {e}")
-    check_news.start()
-    check_results.start()
+        print(f"[TEAM] Erreur : {e}")
+        await interaction.followup.send(f"❌ Erreur pour **{team_name}**.")
 
-# ─────────────────────────────────────────
-# Boucles automatiques
-# ─────────────────────────────────────────
-@tasks.loop(minutes=15)
-async def check_news():
-    await bot.wait_until_ready()
-    if not VLR_CHANNEL_ID: return
-    channel = bot.get_channel(VLR_CHANNEL_ID)
-    if not channel: return
-    for article in get_vlr_news(limit=15):
-        url = article.get("url","")
-        if not url or url in posted: continue
-        date_str = article.get("date","")
-        if "d ago" in date_str:
-            try:
-                if int(date_str.replace("d ago","").strip()) >= 3: continue
-            except: pass
-        posted.add(url)
-        append_file("posted.txt", url)
-        await channel.send(embed=make_vlr_embed(article))
-        await asyncio.sleep(2)
 
-@tasks.loop(minutes=5)
-async def check_results():
-    await bot.wait_until_ready()
-    channel_id = MATCH_CHANNEL_ID or VLR_CHANNEL_ID
-    if not channel_id: return
-    channel = bot.get_channel(channel_id)
-    if not channel: return
-    for match in get_vlr_results():
-        match_id = match.get("url","")
-        if not match_id: continue
-        if match.get("finished") and match_id not in notified_results:
-            notified_results.add(match_id)
-            append_file("results.txt", match_id)
-            await channel.send(embed=make_result_embed(match))
-            await asyncio.sleep(2)
-
-# ─────────────────────────────────────────
-# Commandes
-# ─────────────────────────────────────────
-@bot.tree.command(name="vlr", description="Affiche les dernières news Valorant depuis VLR.gg")
-async def slash_vlr(interaction: discord.Interaction):
-    await interaction.response.defer()
-    articles = get_vlr_news(limit=5)
-    if not articles:
-        await interaction.followup.send("😕 Aucune news trouvée.")
-        return
-    for article in articles:
-        await interaction.followup.send(embed=make_vlr_embed(article))
-
-@bot.tree.command(name="match", description="Live 🔴 / Résultats ✅ / À venir 📅 avec filtre région")
-async def slash_match(interaction: discord.Interaction):
-    await interaction.response.defer()
-    data       = get_all_matches()
-    start_page = 0 if data["live"] else (1 if data["results"] else 2)
-    await interaction.followup.send(
-        embed=build_match_embed(data, start_page),
-        view=MatchView(data, start_page),
-    )
-
-@bot.tree.command(name="results", description="Résultats du jour avec filtre région")
-async def slash_results(interaction: discord.Interaction):
-    await interaction.response.defer()
-    data = get_all_matches()
-    await interaction.followup.send(
-        embed=build_match_embed(data, 1),
-        view=MatchView(data, 1),
-    )
-
-# ─────────────────────────────────────────
-# /team
-# ─────────────────────────────────────────
-class TeamSelect(discord.ui.Select):
-    def __init__(self):
-        options = [discord.SelectOption(label=name, value=tag) for name, tag in TEAMS.items()]
-        super().__init__(placeholder="Choisis une équipe...", min_values=1, max_values=1, options=options, row=0)
+class TeamSelectByRegion(discord.ui.Select):
+    """Étape 2 : sélection de l'équipe dans la région choisie."""
+    def __init__(self, region: str):
+        teams = TEAMS_BY_REGION.get(region, {})
+        options = [discord.SelectOption(label=name, value=tag) for name, tag in teams.items()]
+        super().__init__(
+            placeholder=f"Choisis une équipe {REGION_LABELS.get(region,'')}...",
+            min_values=1, max_values=1, options=options, row=1,
+        )
+        self.region = region
+        self.teams  = teams
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         team_tag  = self.values[0]
-        team_name = next(k for k, v in TEAMS.items() if v == team_tag)
-        try:
-            headers   = {"User-Agent": "Mozilla/5.0"}
-            search_r  = requests.get(f"https://www.vlr.gg/search/?q={team_tag}&type=teams", headers=headers, timeout=10)
-            soup      = BeautifulSoup(search_r.text, "html.parser")
-            team_link = soup.select_one("a.search-item")
-            if not team_link:
-                await interaction.followup.send(f"😕 Impossible de trouver **{team_name}**")
-                return
-            team_url  = "https://www.vlr.gg" + team_link.get("href","")
-            team_page = requests.get(team_url, headers=headers, timeout=10)
-            tsoup     = BeautifulSoup(team_page.text, "html.parser")
+        team_name = next((k for k, v in self.teams.items() if v == team_tag), team_tag)
+        await fetch_team_info(interaction, team_tag, team_name)
 
-            logo_tag = tsoup.select_one(".team-header-logo img")
-            logo_url = None
-            if logo_tag:
-                logo_url = logo_tag.get("src","")
-                if logo_url.startswith("//"): logo_url = "https:" + logo_url
 
-            players = []
-            for player in tsoup.select(".team-roster-item")[:10]:
-                alias = player.select_one(".team-roster-item-name-alias")
-                real  = player.select_one(".team-roster-item-name-real")
-                role  = player.select_one(".team-roster-item-name-role")
-                if alias:
-                    line = f"**{alias.get_text(strip=True)}**"
-                    if real: line += f" — {real.get_text(strip=True)}"
-                    if role: line += f" *({role.get_text(strip=True)})*"
-                    players.append(line)
-
-            past_matches = []
-            for match in tsoup.select(".m-item")[:5]:
-                teams = match.select(".m-item-team-name")
-                score = match.select_one(".m-item-result")
-                date  = match.select_one(".m-item-date")
-                if teams and len(teams) >= 2:
-                    t1 = teams[0].get_text(strip=True)
-                    t2 = teams[1].get_text(strip=True)
-                    sc = score.get_text(strip=True) if score else "vs"
-                    dt = date.get_text(strip=True) if date else ""
-                    past_matches.append(f"`{dt}` {t1} **{sc}** {t2}")
-
-            upcoming_matches = []
-            try:
-                match_page = requests.get(team_url + "/matches", headers=headers, timeout=10)
-                msoup      = BeautifulSoup(match_page.text, "html.parser")
-                for match in msoup.select("a.wf-module-item")[:5]:
-                    mteams = match.select(".match-item-vs-team-name")
-                    time   = match.select_one(".match-item-time")
-                    event  = match.select_one(".match-item-event")
-                    if mteams and len(mteams) >= 2:
-                        mt1   = mteams[0].get_text(strip=True)
-                        mt2   = mteams[1].get_text(strip=True)
-                        heure = time.get_text(strip=True) if time else "?"
-                        ev    = event.get_text(strip=True) if event else ""
-                        line  = f"🕐 `{heure}` — **{mt1}** vs **{mt2}**"
-                        if ev: line += f"\n┗ *{ev}*"
-                        upcoming_matches.append(line)
-            except: pass
-
-            embed = discord.Embed(title=f"🎮 {team_name}", url=team_url, color=0xFF4655)
-            embed.set_author(name="VLR.gg", icon_url=VLR_LOGO)
-            if logo_url:         embed.set_thumbnail(url=logo_url)
-            if players:          embed.add_field(name="👥 Roster",            value="\n".join(players),           inline=False)
-            if upcoming_matches: embed.add_field(name="📆 Prochains matchs",  value="\n\n".join(upcoming_matches), inline=False)
-            if past_matches:     embed.add_field(name="📊 Derniers résultats", value="\n".join(past_matches),      inline=False)
-            embed.add_field(name="🔗 Page complète", value=f"[Voir sur VLR.gg]({team_url})", inline=False)
-            embed.set_footer(text="Données récupérées depuis VLR.gg", icon_url=VLR_LOGO)
-            await interaction.followup.send(embed=embed)
-        except Exception as e:
-            print(f"[TEAM] Erreur : {e}")
-            await interaction.followup.send(f"❌ Erreur pour **{team_name}**.")
-
-class TeamView(discord.ui.View):
+class RegionSelect(discord.ui.Select):
+    """Étape 1 : sélection de la région."""
     def __init__(self):
-        super().__init__(timeout=60)
-        self.add_item(TeamSelect())
+        options = [
+            discord.SelectOption(label=label, value=key)
+            for key, label in REGION_LABELS.items()
+        ]
+        super().__init__(
+            placeholder="1️⃣ Choisis d'abord une région...",
+            min_values=1, max_values=1, options=options, row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        region = self.values[0]
+        # Met à jour la vue avec le menu équipes
+        view = TeamRegionView(region)
+        embed = discord.Embed(
+            title       = f"🔍 Équipes — {REGION_LABELS[region]}",
+            description = "2️⃣ Maintenant choisis une équipe dans le menu ci-dessous.",
+            color       = 0xFF4655,
+        )
+        embed.set_thumbnail(url=VLR_LOGO)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class TeamRegionView(discord.ui.View):
+    """Vue avec les deux menus : région + équipes."""
+    def __init__(self, region: str = None):
+        super().__init__(timeout=120)
+        self.add_item(RegionSelect())
+        if region:
+            self.add_item(TeamSelectByRegion(region))
+
 
 @bot.tree.command(name="team", description="Roster, prochains matchs et résultats d'une équipe Valorant")
 async def slash_team(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🔍 Recherche d'équipe",
-        description="Sélectionne une équipe pour voir son roster, ses prochains matchs et ses résultats.",
-        color=0xFF4655,
+        title       = "🔍 Recherche d'équipe",
+        description = "1️⃣ Commence par choisir une **région** dans le menu ci-dessous.",
+        color       = 0xFF4655,
     )
     embed.set_thumbnail(url=VLR_LOGO)
-    await interaction.response.send_message(embed=embed, view=TeamView())
+    await interaction.response.send_message(embed=embed, view=TeamRegionView())
 
 @bot.tree.command(name="aide", description="Affiche l'aide du bot")
 async def slash_aide(interaction: discord.Interaction):
