@@ -6,7 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from datetime import datetime
-from scrapers.vlr import get_vlr_news, get_vlr_matches, get_vlr_results, get_all_matches
+from scrapers.vlr import get_vlr_news, get_vlr_results, get_all_matches
 
 load_dotenv()
 
@@ -18,13 +18,15 @@ MATCH_CHANNEL_ID = int(os.getenv("MATCH_CHANNEL_ID", 0))
 VLR_LOGO         = "https://www.vlr.gg/img/vlr/logo_header.png"
 
 REGIONS = {
-    "ALL":     {"label": "🌍 Toutes",  "emoji": "🌍"},
-    "EMEA":    {"label": "🇪🇺 EMEA",   "emoji": "🇪🇺"},
-    "NA":      {"label": "🇺🇸 NA",     "emoji": "🇺🇸"},
-    "PACIFIC": {"label": "🌏 Pacific", "emoji": "🌏"},
-    "CHINA":   {"label": "🇨🇳 China",  "emoji": "🇨🇳"},
-    "BR":      {"label": "🇧🇷 LATAM",  "emoji": "🇧🇷"},
+    "ALL":     "🌍 Toutes les régions",
+    "EMEA":    "🇪🇺 EMEA",
+    "NA":      "🇺🇸 NA",
+    "PACIFIC": "🌏 Pacific",
+    "CHINA":   "🇨🇳 China",
+    "BR":      "🇧🇷 LATAM",
 }
+
+ITEMS_PER_PAGE = 8
 
 # ─────────────────────────────────────────
 # Persistance
@@ -63,17 +65,15 @@ def translate_to_french(text):
             params={"client":"gtx","sl":"auto","tl":"fr","dt":"t","q":text},
             timeout=5,
         )
-        data = r.json()
-        return "".join(p[0] for p in data[0] if p[0]) or text
+        return "".join(p[0] for p in r.json()[0] if p[0]) or text
     except:
         return text
 
 # ─────────────────────────────────────────
-# Filtre par région
+# Filtre région
 # ─────────────────────────────────────────
-def filter_by_region(matches: list, region: str) -> list:
-    if region == "ALL":
-        return matches
+def filter_by_region(matches, region):
+    if region == "ALL": return matches
     return [m for m in matches if m.get("region") == region]
 
 # ─────────────────────────────────────────
@@ -112,16 +112,11 @@ def make_result_embed(match):
 # ─────────────────────────────────────────
 # Construction embed paginé
 # ─────────────────────────────────────────
-ITEMS_PER_PAGE = 8
-
-def build_match_embed(data: dict, page: int, region: str = "ALL") -> discord.Embed:
-    region_info = REGIONS.get(region, REGIONS["ALL"])
-    region_label = region_info["label"]
-
+def build_match_embed(data, page, region="ALL"):
+    region_label = REGIONS.get(region, "🌍 Toutes")
     live     = filter_by_region(data["live"],     region)
     results  = filter_by_region(data["results"],  region)
     upcoming = filter_by_region(data["upcoming"], region)
-
     total_up_pages = max(1, -(-len(upcoming) // ITEMS_PER_PAGE))
     total_pages    = 2 + total_up_pages
 
@@ -143,7 +138,7 @@ def build_match_embed(data: dict, page: int, region: str = "ALL") -> discord.Emb
     elif page == 1:
         embed = discord.Embed(
             title       = f"✅ Résultats du jour — {region_label}",
-            description = f"**{len(results)}** match(s) terminé(s) aujourd'hui" if results else "Aucun résultat pour cette région aujourd'hui.",
+            description = f"**{len(results)}** match(s) terminé(s)" if results else "Aucun résultat pour cette région.",
             color       = 0xFF4655,
         )
         by_event = {}
@@ -164,11 +159,10 @@ def build_match_embed(data: dict, page: int, region: str = "ALL") -> discord.Emb
 
     else:
         up_page   = page - 2
-        idx_start = up_page * ITEMS_PER_PAGE
-        chunk     = upcoming[idx_start:idx_start + ITEMS_PER_PAGE]
+        chunk     = upcoming[up_page * ITEMS_PER_PAGE:(up_page + 1) * ITEMS_PER_PAGE]
         embed = discord.Embed(
             title       = f"📅 À venir — {region_label} ({up_page + 1}/{total_up_pages})",
-            description = f"**{len(upcoming)}** match(s) prévus" if upcoming else "Aucun match prévu pour cette région.",
+            description = f"**{len(upcoming)}** match(s) prévus" if upcoming else "Aucun match prévu.",
             color       = 0xFF4655,
         )
         if chunk:
@@ -186,42 +180,21 @@ def build_match_embed(data: dict, page: int, region: str = "ALL") -> discord.Emb
 
     embed.set_author(name="VLR.gg — Calendrier", icon_url=VLR_LOGO)
     embed.set_thumbnail(url=VLR_LOGO)
-    embed.set_footer(text=f"Page {page + 1}/{total_pages} • Région : {region_label} • VLR.gg", icon_url=VLR_LOGO)
+    embed.set_footer(
+        text=f"Page {page+1}/{total_pages} • {region_label} • VLR.gg",
+        icon_url=VLR_LOGO,
+    )
     return embed
 
-def get_total_pages(data: dict, region: str = "ALL") -> int:
+def get_total_pages(data, region="ALL"):
     upcoming = filter_by_region(data["upcoming"], region)
     return 2 + max(1, -(-len(upcoming) // ITEMS_PER_PAGE))
 
 # ─────────────────────────────────────────
-# Boutons de région
-# ─────────────────────────────────────────
-class RegionButton(discord.ui.Button):
-    def __init__(self, region: str, view_ref):
-        info = REGIONS[region]
-        super().__init__(
-            label  = info["label"],
-            style  = discord.ButtonStyle.success if view_ref.region == region else discord.ButtonStyle.secondary,
-            row    = 1,
-        )
-        self.region   = region
-        self.view_ref = view_ref
-
-    async def callback(self, interaction: discord.Interaction):
-        self.view_ref.region      = self.region
-        self.view_ref.page        = 0
-        self.view_ref.total_pages = get_total_pages(self.view_ref.data, self.region)
-        self.view_ref._rebuild()
-        await interaction.response.edit_message(
-            embed=build_match_embed(self.view_ref.data, 0, self.region),
-            view=self.view_ref,
-        )
-
-# ─────────────────────────────────────────
-# Vue principale avec pagination + régions
+# Vue principale — navigation + menu région
 # ─────────────────────────────────────────
 class MatchView(discord.ui.View):
-    def __init__(self, data: dict, page: int = 0, region: str = "ALL"):
+    def __init__(self, data, page=0, region="ALL"):
         super().__init__(timeout=180)
         self.data        = data
         self.page        = page
@@ -234,51 +207,39 @@ class MatchView(discord.ui.View):
 
         # ── Ligne 0 : navigation ──────────────────────────────
         prev = discord.ui.Button(
-            label    = "◀ Précédent",
-            style    = discord.ButtonStyle.primary,
-            disabled = self.page == 0,
-            row      = 0,
+            label="◀ Précédent", style=discord.ButtonStyle.primary,
+            disabled=self.page == 0, row=0,
         )
         prev.callback = self._prev
+        self.add_item(prev)
 
-        nxt_labels = {0: "Résultats ▶", 1: "À venir ▶"}
+        nxt_label = {0: "Résultats ▶", 1: "À venir ▶"}.get(self.page, "Suivant ▶")
         nxt = discord.ui.Button(
-            label    = nxt_labels.get(self.page, "Suivant ▶"),
-            style    = discord.ButtonStyle.primary,
-            disabled = self.page >= self.total_pages - 1,
-            row      = 0,
+            label=nxt_label, style=discord.ButtonStyle.primary,
+            disabled=self.page >= self.total_pages - 1, row=0,
         )
         nxt.callback = self._next
+        self.add_item(nxt)
 
         refresh = discord.ui.Button(label="🔄 Actualiser", style=discord.ButtonStyle.success, row=0)
         refresh.callback = self._refresh
-
-        self.add_item(prev)
-        self.add_item(nxt)
         self.add_item(refresh)
 
-        # ── Ligne 1 : filtres région ──────────────────────────
-        for region in REGIONS:
-            btn = discord.ui.Button(
-                label    = REGIONS[region]["label"],
-                style    = discord.ButtonStyle.success if self.region == region else discord.ButtonStyle.secondary,
-                row      = 1,
-            )
-            btn.region = region
-            btn.callback = self._make_region_callback(region)
-            self.add_item(btn)
-
-    def _make_region_callback(self, region: str):
-        async def callback(interaction: discord.Interaction):
-            self.region      = region
-            self.page        = 0
-            self.total_pages = get_total_pages(self.data, region)
-            self._rebuild()
-            await interaction.response.edit_message(
-                embed=build_match_embed(self.data, 0, region),
-                view=self,
-            )
-        return callback
+        # ── Ligne 1 : menu déroulant région ──────────────────
+        region_select = discord.ui.Select(
+            placeholder = f"Région : {REGIONS.get(self.region, '🌍 Toutes')}",
+            options     = [
+                discord.SelectOption(
+                    label   = label,
+                    value   = key,
+                    default = key == self.region,
+                )
+                for key, label in REGIONS.items()
+            ],
+            row=1,
+        )
+        region_select.callback = self._region_changed
+        self.add_item(region_select)
 
     async def _prev(self, interaction: discord.Interaction):
         self.page -= 1
@@ -299,6 +260,14 @@ class MatchView(discord.ui.View):
         self.page        = min(self.page, self.total_pages - 1)
         self._rebuild()
         await interaction.edit_original_response(
+            embed=build_match_embed(self.data, self.page, self.region), view=self)
+
+    async def _region_changed(self, interaction: discord.Interaction):
+        self.region      = interaction.data["values"][0]
+        self.page        = 0
+        self.total_pages = get_total_pages(self.data, self.region)
+        self._rebuild()
+        await interaction.response.edit_message(
             embed=build_match_embed(self.data, self.page, self.region), view=self)
 
 # ─────────────────────────────────────────
@@ -366,39 +335,32 @@ async def slash_vlr(interaction: discord.Interaction):
     for article in articles:
         await interaction.followup.send(embed=make_vlr_embed(article))
 
-@bot.tree.command(name="match", description="Live 🔴 / Résultats ✅ / À venir 📅 avec filtres par région")
+@bot.tree.command(name="match", description="Live 🔴 / Résultats ✅ / À venir 📅 avec filtre région")
 async def slash_match(interaction: discord.Interaction):
     await interaction.response.defer()
     data       = get_all_matches()
     start_page = 0 if data["live"] else (1 if data["results"] else 2)
     await interaction.followup.send(
-        embed=build_match_embed(data, start_page, "ALL"),
-        view=MatchView(data, start_page, "ALL"),
+        embed=build_match_embed(data, start_page),
+        view=MatchView(data, start_page),
     )
 
-@bot.tree.command(name="results", description="Récapitulatif des résultats du jour avec filtre région")
+@bot.tree.command(name="results", description="Résultats du jour avec filtre région")
 async def slash_results(interaction: discord.Interaction):
     await interaction.response.defer()
     data = get_all_matches()
     await interaction.followup.send(
-        embed=build_match_embed(data, 1, "ALL"),
-        view=MatchView(data, 1, "ALL"),
+        embed=build_match_embed(data, 1),
+        view=MatchView(data, 1),
     )
 
-@bot.tree.command(name="team", description="Roster, prochains matchs et résultats d'une équipe Valorant")
-async def slash_team(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🔍 Recherche d'équipe",
-        description="Sélectionne une équipe pour voir son roster, ses prochains matchs et ses résultats.",
-        color=0xFF4655,
-    )
-    embed.set_thumbnail(url=VLR_LOGO)
-    await interaction.response.send_message(embed=embed, view=TeamView())
-
+# ─────────────────────────────────────────
+# /team
+# ─────────────────────────────────────────
 class TeamSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=name, value=tag) for name, tag in TEAMS.items()]
-        super().__init__(placeholder="Choisis une équipe...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="Choisis une équipe...", min_values=1, max_values=1, options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -465,7 +427,7 @@ class TeamSelect(discord.ui.Select):
 
             embed = discord.Embed(title=f"🎮 {team_name}", url=team_url, color=0xFF4655)
             embed.set_author(name="VLR.gg", icon_url=VLR_LOGO)
-            if logo_url: embed.set_thumbnail(url=logo_url)
+            if logo_url:         embed.set_thumbnail(url=logo_url)
             if players:          embed.add_field(name="👥 Roster",            value="\n".join(players),           inline=False)
             if upcoming_matches: embed.add_field(name="📆 Prochains matchs",  value="\n\n".join(upcoming_matches), inline=False)
             if past_matches:     embed.add_field(name="📊 Derniers résultats", value="\n".join(past_matches),      inline=False)
@@ -481,15 +443,25 @@ class TeamView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(TeamSelect())
 
+@bot.tree.command(name="team", description="Roster, prochains matchs et résultats d'une équipe Valorant")
+async def slash_team(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔍 Recherche d'équipe",
+        description="Sélectionne une équipe pour voir son roster, ses prochains matchs et ses résultats.",
+        color=0xFF4655,
+    )
+    embed.set_thumbnail(url=VLR_LOGO)
+    await interaction.response.send_message(embed=embed, view=TeamView())
+
 @bot.tree.command(name="aide", description="Affiche l'aide du bot")
 async def slash_aide(interaction: discord.Interaction):
     embed = discord.Embed(title="📰 Esport Actu — Aide", description="Toutes les commandes disponibles :", color=0xFF4655)
     embed.set_thumbnail(url=VLR_LOGO)
-    embed.add_field(name="</vlr:0>",     value="Dernières news Valorant (traduites 🇫🇷)",                      inline=False)
-    embed.add_field(name="</match:0>",   value="Live 🔴 / Résultats ✅ / À venir 📅 + filtre région",          inline=False)
-    embed.add_field(name="</results:0>", value="Résultats du jour directement + filtre région",                 inline=False)
-    embed.add_field(name="</team:0>",    value="Roster, prochains matchs & résultats d'une équipe",            inline=False)
-    embed.add_field(name="</aide:0>",    value="Affiche ce message",                                           inline=False)
+    embed.add_field(name="</vlr:0>",     value="Dernières news Valorant (traduites 🇫🇷)",             inline=False)
+    embed.add_field(name="</match:0>",   value="Live 🔴 / Résultats ✅ / À venir 📅 + menu région",  inline=False)
+    embed.add_field(name="</results:0>", value="Résultats du jour + menu région",                     inline=False)
+    embed.add_field(name="</team:0>",    value="Roster, prochains matchs & résultats d'une équipe",   inline=False)
+    embed.add_field(name="</aide:0>",    value="Affiche ce message",                                  inline=False)
     embed.set_footer(text="Résultats envoyés automatiquement dès la fin d'un match • VLR.gg", icon_url=VLR_LOGO)
     await interaction.response.send_message(embed=embed)
 
